@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
-
+use anchor_spl::token::{mint_to, MintTo, Mint, TokenAccount, Token};
+use anchor_spl::associated_token::AssociatedToken;
 
 declare_id!("F23Dge4MZTKTbFs2mggkTAdK9kVDEXH7VrLjUQGULHet");
 
@@ -11,17 +12,23 @@ const MAX_DESCRIPTION_LENGTH: usize = 50;
 #[program]
 pub mod anchor_movie_review_program {
     use super::*;
-    pub fn add_movie_review(ctx: Context<AddMovieReview>,
+
+    pub fn initialize_token_mint(_ctx: Context<InitializeMint>) -> Result<()> {
+    msg!("Token mint initialized");
+    Ok(())
+}
+    pub fn add_movie_review(
+        ctx: Context<AddMovieReview>,
         title: String,
         description: String,
-        rating: u8,
-    )-> Result<()>{ 
-        require!(rating >=MIN_RATING && rating<= MAX_RATING, MovieReviewError::InvalidRating);
+        rating: u8
+    ) -> Result<()> {
+        require!(rating >= MIN_RATING && rating <= MAX_RATING, MovieReviewError::InvalidRating);
 
-        require!(title.len() <= MAX_TITLE_LENGTH , MovieReviewError::TitleTooLong );
-        
+        require!(title.len() <= MAX_TITLE_LENGTH, MovieReviewError::TitleTooLong);
+
         require!(description.len() <= MAX_DESCRIPTION_LENGTH, MovieReviewError::DescriptionTooLong);
-        
+
         msg!("Movie Review Account Created");
         msg!("Title: {}", title);
         msg!("Description: {}", description);
@@ -32,18 +39,33 @@ pub mod anchor_movie_review_program {
         movie_review.title = title;
         movie_review.rating = rating;
         movie_review.description = description;
+
+        mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo{
+                    authority: ctx.accounts.initializer.to_account_info(),
+                    to: ctx.accounts.token_account.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info()
+                },
+                &[&[
+                    "mint".as_bytes(),
+                    &[ctx.bumps.mint]
+                ]]
+            ),
+            10 * 10u64.pow(6)
+        )?;
+        msg!("Minted tokens");
         Ok(())
-
-
     }
 
-    pub fn update_movie_review(ctx: Context<UpdateMovieReview>,
-     title: String,
-     description: String,
-     rating: u8,
-    ) -> Result<()>{
+    pub fn update_movie_review(
+        ctx: Context<UpdateMovieReview>,
+        title: String,
+        description: String,
+        rating: u8
+    ) -> Result<()> {
         require!(rating <= MAX_RATING && rating >= MIN_RATING, MovieReviewError::InvalidRating);
-        require!(title.len() <= MAX_TITLE_LENGTH, MovieReviewError::TitleTooLong);
         require!(description.len() < MAX_DESCRIPTION_LENGTH, MovieReviewError::DescriptionTooLong);
 
         msg!("Movie review account space reallocated");
@@ -58,33 +80,66 @@ pub mod anchor_movie_review_program {
         Ok(())
     }
 
-    pub fn delete_movie_review(_ctx: Context<DeleteMovieReview>,
-    title: String) -> Result<()>{
+    pub fn delete_movie_review(_ctx: Context<DeleteMovieReview>, title: String) -> Result<()> {
         msg!("Movie review for {} deleted", title);
         Ok(())
     }
-
-
 }
+
 #[derive(Accounts)]
-#[instruction(title:String)]
-pub struct AddMovieReview<'info>{
- #[account(
-       init,
+pub struct InitializeMint<'info> {
+    #[account(
+        init,
+        seeds = ["mint".as_bytes()],
+        bump,
+        payer = user,
+        mint::decimals = 6,
+        mint::authority = user,
+    )]
+    pub mint: Account<'info, Mint>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    pub rent : Sysvar<'info, Rent>,
+    pub system_program: Program<'info, System> 
+}
+
+
+
+#[derive(Accounts)]
+#[instruction(title:String, description: String)]
+pub struct AddMovieReview<'info> {
+    #[account(
+        init,
         seeds = [title.as_bytes(), initializer.key().as_ref()],
         bump,
         payer = initializer,
         space = DISCRIMINATOR + MovieAccountState::INIT_SPACE
- )]
- pub movie_review: Account<'info, MovieAccountState>,
- #[account(mut)]
- pub initializer: Signer<'info>,
- pub system_program: Program<'info,System>,
+    )]
+    pub movie_review: Account<'info, MovieAccountState>,
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+     pub token_program: Program<'info, Token>,
+    #[account(
+        seeds = ["mint".as_bytes()],
+        bump,
+        mut
+    )]
+    pub mint: Account<'info, Mint>,
+    #[account(
+        init_if_needed,
+        payer = initializer,
+        associated_token::mint = mint,
+        associated_token::authority = initializer
+    )]
+    pub token_account: Account<'info, TokenAccount>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
 }
 
 #[derive(Accounts)]
 #[instruction(title:String)]
-pub struct UpdateMovieReview<'info>{
+pub struct UpdateMovieReview<'info> {
     #[account(
         mut,
         seeds = [title.as_bytes(), initializer.key().as_ref()],
@@ -94,7 +149,6 @@ pub struct UpdateMovieReview<'info>{
         realloc::zero = true,
 
     )]
-
     pub movie_review: Account<'info, MovieAccountState>,
     #[account(mut)]
     pub initializer: Signer<'info>,
@@ -102,7 +156,7 @@ pub struct UpdateMovieReview<'info>{
 }
 #[derive(Accounts)]
 #[instruction(title: String)]
-pub struct DeleteMovieReview<'info>{
+pub struct DeleteMovieReview<'info> {
     #[account(
         mut,
         seeds = [title.as_bytes(), initializer.key().as_ref()],
@@ -112,29 +166,29 @@ pub struct DeleteMovieReview<'info>{
     pub movie_review: Account<'info, MovieAccountState>,
     #[account(mut)]
     pub initializer: Signer<'info>,
-    pub system_program: Program<'info, System>
+    pub system_program: Program<'info, System>,
 }
 
 #[account]
 #[derive(InitSpace)]
-pub struct MovieAccountState{
+pub struct MovieAccountState {
     pub reviewer: Pubkey,
     pub rating: u8,
     #[max_len(20)]
     pub title: String,
     #[max_len(50)]
-    pub description: String
+    pub description: String,
 }
 
 const DISCRIMINATOR: usize = 8;
 
 //custom error handling
 #[error_code]
-enum MovieReviewError{
+enum MovieReviewError {
     #[msg("Rating must be between 1 and 5")]
     InvalidRating,
     #[msg("Movie Title too long")]
     TitleTooLong,
     #[msg("Movie description too long")]
-    DescriptionTooLong
+    DescriptionTooLong,
 }
